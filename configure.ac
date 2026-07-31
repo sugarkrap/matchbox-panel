@@ -56,6 +56,11 @@ AC_ARG_ENABLE(acpi-linux,
   [  --enable-acpi-linux   Use Linux ACPI rather than APM for battery info],
      enable_acpi_linux=$enableval, enable_acpi_linux=no )
 
+AC_ARG_ENABLE(proc-apm,
+  [  --enable-proc-apm     Use Linux /proc/apm (APM emulation) for battery info,
+                          no libapm required],
+     enable_proc_apm=$enableval, enable_proc_apm=no )
+
 PKG_CHECK_MODULES(LIBMB, libmb >= 1.6,,
 	         AC_MSG_ERROR([*** Required Matchbox Library (libmb) 1.6 not installed ***]))
 
@@ -186,7 +191,10 @@ dnl ----- Specific Applet deps ----------------------------------------------
 
 miniapm_enabled="no ( enable ACPI? )"
 
-if test x$enable_acpi_linux = xyes; then
+if test x$enable_proc_apm = xyes; then
+  AC_DEFINE(USE_PROC_APM, [1], [Use /proc/apm to get battery status])
+  miniapm_enabled="yes, with /proc/apm"
+elif test x$enable_acpi_linux = xyes; then
   miniapm_enabled="yes, with ACPI"
 else
   AC_CHECK_HEADERS(apm.h, enable_linux_apm=yes, enable_linux_apm=no)
@@ -204,7 +212,14 @@ fi
 
 AM_CONDITIONAL(WANT_APM, test x"$miniapm_enabled" = xyes)
 
-AM_CONDITIONAL(WANT_ACPI, test x$enable_acpi_linux = xyes)
+dnl /proc/apm wins over ACPI (see the elif above), so keep the automake
+dnl conditionals mutually exclusive -- otherwise both blocks in
+dnl applets/Makefile.am fire and mb-applet-battery lands in bin_PROGRAMS
+dnl twice with a duplicate _SOURCES assignment.
+AM_CONDITIONAL(WANT_ACPI, test x$enable_acpi_linux = xyes \
+                          && test x$enable_proc_apm != xyes)
+
+AM_CONDITIONAL(WANT_PROC_APM, test x$enable_proc_apm = xyes)
 
 
 dnl ------ wireless checks --------------------------------------------------

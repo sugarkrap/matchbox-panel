@@ -12,6 +12,14 @@ if WANT_APM
    files += mb-applet-battery.desktop
 endif
 
+if WANT_ACPI
+   files += mb-applet-battery.desktop
+endif
+
+if WANT_PROC_APM
+   files += mb-applet-battery.desktop
+endif
+
 if WANT_WIFI
    files +=  mb-applet-wireless.desktop 
 endif

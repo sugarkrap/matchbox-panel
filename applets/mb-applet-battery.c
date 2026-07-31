@@ -134,7 +134,70 @@ sn_activate(char *name, char *exec_str)
 
 #endif
 
-#ifdef USE_ACPI_LINUX
+#ifdef USE_PROC_APM
+
+/* Read battery state straight out of /proc/apm, as provided by the kernel's
+ * APM emulation layer (CONFIG_APM_EMULATION).  This avoids a dependency on
+ * libapm/apm.h, which is what the HAVE_APM_H path below needs.
+ *
+ * Format (drivers/char/apm-emulation.c, proc_apm_show):
+ *   driver-ver bios-ver flags ac-line batt-status batt-flag batt-life% time units
+ * e.g.  "1.13 1.2 0x03 0x01 0x03 0x09 98% -1 ?"
+ *
+ * On this board the provider is sharpsl_pm, whose apm_get_power_status only
+ * fills in ac_line_status, battery_status, battery_flag and battery_life --
+ * it leaves time and units alone, so they stay at the kernel's defaults of
+ * -1 and "?".  Expect no runtime estimate here, only a percentage; every
+ * consumer of TIME_LEFT in this applet is guarded on "> 0", so -1 is fine.
+ */
+
+#define PROC_APM_PATH "/proc/apm"
+
+static int
+read_apm(int *values)
+{
+  FILE *f;
+  char  units[16];
+  char  line[256];
+  int   ac = -1, batt_status = 0, batt_flag = 0, percent = -1, time_left = -1;
+
+  values[TIME_LEFT]  = -1;
+  values[PERCENTAGE] = -1;
+  values[AC_POWER]   = 0;
+
+  f = fopen(PROC_APM_PATH, "r");
+  if (f == NULL)
+    return 0;
+
+  if (fgets(line, sizeof(line), f) == NULL)
+    {
+      fclose(f);
+      return 0;
+    }
+  fclose(f);
+
+  units[0] = '\0';
+
+  if (sscanf(line, "%*s %*s %*x %x %x %x %d%% %d %15s",
+	     &ac, &batt_status, &batt_flag, &percent, &time_left, units) < 4)
+    return 0;
+
+  /* This applet counts TIME_LEFT in MINUTES: the tooltip prints
+   * TIME_LEFT/60 as hours and TIME_LEFT%60 as minutes, and
+   * time_left_alerts[] holds { 0, 2, 5, 10, 20 }.  /proc/apm reports
+   * either unit and says which in the last field, so scale seconds down
+   * rather than minutes up.  */
+  if (time_left > 0 && units[0] == 's')	/* "sec" */
+    time_left /= 60;
+
+  values[TIME_LEFT]  = time_left;
+  values[PERCENTAGE] = percent;
+  values[AC_POWER]   = (ac == 1) ? AC_LINE_STATUS_ON : 0;
+
+  return 1;
+}
+
+#elif defined(USE_ACPI_LINUX)
 
 #define ACPI_PREFIX	"/proc/acpi"
 #define BAT_PREFIX	"battery/BAT0"

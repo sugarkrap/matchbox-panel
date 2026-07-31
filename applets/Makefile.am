@@ -32,6 +32,12 @@ if WANT_ACPI
   mb_applet_battery_LDADD   =        $(LIBMB_LIBS) $(SN_LIBS)
 endif
 
+if WANT_PROC_APM
+  bin_PROGRAMS += mb-applet-battery
+  mb_applet_battery_SOURCES   =      mb-applet-battery.c
+  mb_applet_battery_LDADD   =        $(LIBMB_LIBS) $(SN_LIBS)
+endif
+
 
 LDADD = $(LIBMB_LIBS) $(SN_LIBS)
 
