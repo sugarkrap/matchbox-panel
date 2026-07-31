@@ -227,10 +227,19 @@ dnl ------ wireless checks --------------------------------------------------
 wifi_enabled=no
 
 AC_CHECK_HEADERS(iwlib.h, have_iwlib_h=yes, have_iwlib_h=no)
-AC_CHECK_LIB(iw, iw_sockets_open, have_libiw=yes, have_libiw=yes)
+dnl Upstream passed have_libiw=yes as BOTH the found and not-found action,
+dnl so this check could never fail and the result meant nothing. -lm is
+dnl listed as an other-library because libiw's frequency helpers reference
+dnl floor/log10/pow unless it was built -DWE_NOLIBM, and without it the
+dnl probe can fail for a reason that has nothing to do with libiw.
+AC_CHECK_LIB(iw, iw_sockets_open, have_libiw=yes, have_libiw=no, [-lm])
 
 if test x$have_iwlib_h = x"yes" && test x$have_libiw = x"yes"; then
-	WIRELESS_LIBS="-liw"
+	dnl mb-applet-wireless itself calls rint() and log() to scale link
+	dnl quality, so it needs libm whatever libiw was built with. (Harmless
+	dnl on uclibc, which folds the math symbols into libc and ships only a
+	dnl static libm.a -- the applet gains no new DT_NEEDED.)
+	WIRELESS_LIBS="-liw -lm"
 	wifi_enabled=yes
 fi
 AC_SUBST(WIRELESS_LIBS)
