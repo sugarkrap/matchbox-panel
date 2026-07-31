@@ -64,8 +64,17 @@ MBDrawable *Drw  = NULL;
 MBColor    *Col  = NULL;
 MBPixbuf   *Pixbuf;
 
+/* Font height in pixels; 0 means 'use the tray size', the old behaviour. */
+static int FontPixels = 0;
+
 void usage()
 {
+  fprintf(stderr,
+	  "mb-applet-clock usage:\n"
+	  "  -s, --font-size <pixels>   Height of the clock font in pixels.\n"
+	  "                             Default is the panel's own height, which\n"
+	  "                             fills the tray edge to edge and is often\n"
+	  "                             too big on a small screen.\n");
   exit(1);
 }
 
@@ -243,8 +252,10 @@ resize_callback ( MBTrayApp *app, int w, int h )
 {
   int   req_size   = 0;
 
-  mb_font_set_size_to_pixels (Fnt, 
-			      (mb_tray_app_tray_is_vertical(app) ? w : h), 
+  mb_font_set_size_to_pixels (Fnt,
+			      FontPixels > 0
+			        ? FontPixels
+			        : (mb_tray_app_tray_is_vertical(app) ? w : h),
 			      NULL);
 
   req_size = mb_font_get_txt_width (Fnt, 
@@ -350,6 +361,22 @@ main(int argc, char **argv)
 			  &argv );  
 
   if (app == NULL) usage();
+
+  /* mb_tray_app_new() removes the arguments it understands from argv, so
+   * whatever is left here is ours. */
+  {
+    int i;
+    for (i = 1; i < argc; i++)
+      {
+	if (!strcmp(argv[i], "-s") || !strcmp(argv[i], "--font-size"))
+	  {
+	    if (++i >= argc) usage();
+	    FontPixels = atoi(argv[i]);
+	    if (FontPixels < 1) usage();
+	  }
+	else usage();
+      }
+  }
 
   Pixbuf = mb_pixbuf_new(mb_tray_app_xdisplay(app), 
 			 mb_tray_app_xscreen(app));
