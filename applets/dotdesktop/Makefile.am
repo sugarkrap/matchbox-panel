@@ -2,11 +2,13 @@
 dfiles =                                                        \
       mb-applet-battery.desktop         mb-applet-wireless.desktop \
       mb-applet-clock.desktop           mb-launcher-term.desktop   \
-      mb-applet-menu-launcher.desktop   mb-applet-system-monitor.desktop
+      mb-applet-menu-launcher.desktop   mb-applet-system-monitor.desktop \
+      mb-applet-tasks.desktop
 
 files =                                                         \
       mb-applet-clock.desktop           mb-launcher-term.desktop   \
-      mb-applet-menu-launcher.desktop   mb-applet-system-monitor.desktop
+      mb-applet-menu-launcher.desktop   mb-applet-system-monitor.desktop \
+      mb-applet-tasks.desktop
 
 if WANT_APM
    files += mb-applet-battery.desktop

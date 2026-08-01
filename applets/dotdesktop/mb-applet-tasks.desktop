@@ -1,0 +1,7 @@
+[Desktop Entry]
+Name=Tasks
+Comment=Panel based taskbar
+Exec=mb-applet-tasks
+Type=PanelApp
+Icon=mbnoapp.png
+Categories=Panel;Utility;MB
