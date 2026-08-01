@@ -89,6 +89,25 @@
 
 #define ATOM_MB_DOCK_TITLEBAR_SHOW_ON_DESKTOP 31
 
+/* _MB_SYSTEM_TRAY_MESSAGE_URGENT -- a CARDINAL an applet sets on its own
+ * tray window to mark the message it is *about* to send as an error rather
+ * than as ordinary news. Non-zero means urgent; absent or zero means normal.
+ *
+ * The system tray message protocol has no spare field for this: all five
+ * data.l slots of SYSTEM_TRAY_BEGIN_MESSAGE are already spoken for. So it
+ * rides on a window property instead, exactly like the context-button text
+ * in _MB_SYSTEM_TRAY_CONTEXT does. The property is read when BEGIN_MESSAGE
+ * arrives, not when the bubble is finally drawn, so an applet that sets the
+ * property immediately before sending gets the value it meant: requests
+ * from one client are processed in order, so the change is already in
+ * effect by the time the panel asks.
+ *
+ * An applet is expected to set this before EVERY message, including a 0 for
+ * normal ones -- a hidden applet's window is destroyed and recreated with a
+ * fresh XID (see mb_tray_app_hide), so a value set once does not stick.
+ */
+#define ATOM_MB_SYSTEM_TRAY_MESSAGE_URGENT 32
+
 #define XEMBED_EMBEDDED_NOTIFY  0
 #define XEMBED_WINDOW_ACTIVATE  1
 
@@ -174,7 +193,9 @@ typedef struct _message_queue {
   Bool                    has_extra_context;
   unsigned char          *extra_context_data;
 
-  Bool                    pending;  /* Set to true if all data */ 
+  Bool                    urgent;   /* draw in the urgent colour */
+
+  Bool                    pending;  /* Set to true if all data */
    
   struct _message_queue  *next;
    
@@ -197,7 +218,7 @@ typedef struct _panel {
   MBPanelApp             *apps_start_head;
   MBPanelApp             *apps_end_head;
 
-  Atom                    atoms[32];
+  Atom                    atoms[33];
   int                     padding;
   int                     margin_topbottom;
   int                     margin_sides;  
