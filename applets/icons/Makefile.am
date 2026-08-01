@@ -1,10 +1,14 @@
+# minisys3.* is the three-meter form of minisys.*: the same tube three
+# times over on a canvas half again as wide. mb-applet-system-monitor
+# swaps to it while the SD card's swapfile is enabled and needs a third
+# bar to draw; see that applet's source for how to regenerate it.
 pngs = \
-broken-0.png  minisys.png        no-link-0.png     signal-61-80.png  \
+minisys3.png       broken-0.png  minisys.png        no-link-0.png     signal-61-80.png  \
 mbmenu.png    minitime.png       signal-1-40.png   signal-81-100.png \
 mbterm.png    signal-41-60.png   miniapm-power.png miniapm.png
 
 xpms = \
-mbterm.xpm    minisys.xpm        no-link-0.xpm      signal-41-60.xpm   \
+minisys3.xpm       mbterm.xpm    minisys.xpm        no-link-0.xpm      signal-41-60.xpm   \
 broken-0.xpm  signal-61-80.xpm   miniapm-power.xpm  miniapm.xpm       \
 mbmenu.xpm    signal-1-40.xpm    signal-81-100.xpm  minitime.xpm
 
