@@ -29,7 +29,7 @@ MBPanel *G_panel = NULL;
 /* Urgent bubbles keep the ordinary black border and black text and change
  * only the fill, so the difference reads as "something went wrong" at a
  * glance without the text getting any harder to read -- which matters on a
- * 320x240 transflective panel. A washed-out red rather than a saturated one
+ * transflective panel. A washed-out red rather than a saturated one
  * for the same reason: black on pure red is genuinely hard to read outdoors.
  * Themeable as PanelMsgBgUrgentCol. */
 #define DEFAULT_MSG_BGURGCOL "#f2a0a0"
