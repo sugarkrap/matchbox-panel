@@ -175,7 +175,6 @@ static IconSlot       Icons[MAX_ICONS];
 
 static int            IconSize = 24;
 static int            FontPixels;      /* 0 = derive from the panel height */
-static int            Visible = -1;    /* tri-state, -1 = not decided yet */
 static Bool           Dirty;           /* a rescan is owed */
 static int            LastWidth = -1;  /* last size we asked the panel for */
 
@@ -636,6 +635,14 @@ icon_from_wmhints (Window win)
   return scale_to_icon (img);
 }
 
+/* Drops every cached icon -- and every borrowed pointer to one.
+ *
+ * Group.icon is borrowed from this cache, so freeing the cache without
+ * clearing those turns the next repaint into a use-after-free. That is
+ * not a narrow window: resize_callback() flushes the cache (the icons
+ * were scaled for the old panel height) and only marks a rebuild as due,
+ * while the Expose that follows docking repaints immediately -- so the
+ * applet segfaulted the moment it docked, every time. */
 static void
 icons_flush (void)
 {
@@ -649,6 +656,9 @@ icons_flush (void)
       Icons[i].used   = False;
       Icons[i].key[0] = '\0';
     }
+
+  for (i = 0; i < MAX_GROUPS; i++)
+    Groups[i].icon = NULL;
 }
 
 /* Cached by application key, so a second window of the same program costs
@@ -1230,6 +1240,21 @@ draw_button_bg (MBPixbufImage *img, int x, int w, int h,
 {
   int icon_x = x + BTN_PAD;
   int icon_y = (h - IconSize) / 2;
+  int dst_w  = mb_pixbuf_img_get_width (img);
+  int dst_h  = mb_pixbuf_img_get_height (img);
+
+  /* Clip to the image we actually have, which is NOT always as wide as
+   * the layout assumes. A resize is a request: layout() sizes the buttons
+   * for the width we asked the panel for, but the repaint that follows
+   * runs against whatever width we have been granted so far -- and going
+   * from an empty taskbar to a populated one means painting a 140px row
+   * of buttons onto the 1px background of an applet the panel has not
+   * resized yet. fill_rect() bounds-checks itself; libmb's compositor
+   * does not, so that was a heap overflow rather than a clipped icon. */
+  if (x >= dst_w)
+    return;
+  if (x + w > dst_w)
+    w = dst_w - x;
 
   if (active)
     {
@@ -1245,15 +1270,31 @@ draw_button_bg (MBPixbufImage *img, int x, int w, int h,
 
   if (icon != NULL)
     {
+      /* Copy the icon's real size, not the size we asked for. libmb's
+       * compositor takes the caller's word for the source extent and
+       * walks off the end of a smaller image -- so a scale that came back
+       * short would be a buffer overrun rather than a misdrawn button. */
+      int iw = mb_pixbuf_img_get_width (icon);
+      int ih = mb_pixbuf_img_get_height (icon);
+
+      if (iw > IconSize) iw = IconSize;
+      if (ih > IconSize) ih = IconSize;
+
+      /* ... and clipped against the destination too, per above. */
+      if (icon_x + iw > dst_w) iw = dst_w - icon_x;
+      if (icon_y + ih > dst_h) ih = dst_h - icon_y;
+      if (icon_x < 0 || icon_y < 0 || iw <= 0 || ih <= 0)
+	return;
+
       /* A minimised application is still running, so it keeps its button;
        * fading the icon is what says "not on screen right now". */
       if (minimized)
 	mb_pixbuf_img_copy_composite_with_alpha (Pb, img, icon,
-						 0, 0, IconSize, IconSize,
+						 0, 0, iw, ih,
 						 icon_x, icon_y, 128);
       else
 	mb_pixbuf_img_copy_composite (Pb, img, icon,
-				      0, 0, IconSize, IconSize,
+				      0, 0, iw, ih,
 				      icon_x, icon_y);
     }
 }
@@ -1556,27 +1597,6 @@ relayout_and_paint (void)
   mb_tray_app_repaint (App);
 }
 
-static void
-update_visibility (void)
-{
-  int want = (NGroups > 0);
-
-  if (want == Visible)
-    return;
-
-  if (want)
-    mb_tray_app_unhide (App);
-  else
-    mb_tray_app_hide (App);
-
-  /* Unhiding re-docks from scratch, so the panel knows nothing about the
-   * width we asked for last time we were up. Forget it too, or the next
-   * relayout sees "same as before" and never sends the request. */
-  LastWidth = -1;
-
-  Visible = want;
-}
-
 /* One place decides when it is safe to rebuild. mb_menu's items point at
  * memory this rebuild reuses, and mb_menu dispatches clicks from inside
  * our own event loop, so rebuilding under an open menu is a
@@ -1593,7 +1613,6 @@ request_rebuild (void)
 
   Dirty = False;
   rebuild ();
-  update_visibility ();
   relayout_and_paint ();
 }
 
@@ -1698,7 +1717,6 @@ timeout_callback (MBTrayApp *app)
 
     if (changed)
       {
-	update_visibility ();
 	relayout_and_paint ();
       }
     else
@@ -1718,13 +1736,15 @@ resize_callback (MBTrayApp *app, int w, int h)
   (void) app;
   (void) w;
 
+  int want_icon;
+
   /* The panel decides our height; the icon follows it rather than the
    * other way round. Anything below 16 is not recognisable. */
-  IconSize = h - 8;
-  if (IconSize < 16)
-    IconSize = 16;
-  if (IconSize > 32)
-    IconSize = 32;
+  want_icon = h - 8;
+  if (want_icon < 16)
+    want_icon = 16;
+  if (want_icon > 32)
+    want_icon = 32;
 
   if (Fnt != NULL && FontPixels == 0)
     {
@@ -1736,8 +1756,16 @@ resize_callback (MBTrayApp *app, int w, int h)
       mb_font_set_size_to_pixels (Fnt, px, NULL);
     }
 
-  icons_flush ();		/* cached at the old size */
-  Dirty = True;
+  /* Only when the size really changed. This callback fires on every
+   * width change too, and the taskbar changes width whenever a window
+   * opens or closes -- re-reading every icon PNG off flash each time
+   * would be a poor trade on a 400MHz part. */
+  if (want_icon != IconSize)
+    {
+      IconSize = want_icon;
+      icons_flush ();		/* cached at the old size */
+      Dirty = True;
+    }
 }
 
 static void
@@ -1866,7 +1894,11 @@ main (int argc, char *argv[])
       exit (1);
     }
 
-  Fnt = mb_font_new_from_string (Dpy, "Sans");
+  /* Bold, like mb-applet-clock. On a 640x480 transflective LCD a regular
+   * weight at this size renders as thin grey antialiasing that never
+   * reaches the text colour -- measurably: its darkest pixel came out at
+   * 42% grey against the clock's solid black. */
+  Fnt = mb_font_new_from_string (Dpy, "Sans bold");
   if (Fnt == NULL)
     {
       fprintf (stderr, "mb-applet-tasks: failed to open a font\n");
@@ -1904,14 +1936,21 @@ main (int argc, char *argv[])
   tv.tv_usec = 0;
   mb_tray_app_set_timeout_callback (App, timeout_callback, &tv);
 
-  /* Same reasoning as mb-applet-card: pre-hide rather than hide after
-   * docking, so a session that starts with no windows open never creates
-   * a tray window at all instead of docking and flickering away. Do NOT
-   * call mb_tray_app_main_init() -- mb_tray_app_main() does it. */
-  if (NGroups == 0)
-    mb_tray_app_hide (App);
-  Visible = (NGroups > 0);
-
+  /* Deliberately NOT self-hiding when there is nothing to show, the way
+   * mb-applet-card does.
+   *
+   * The panel starts its applets one at a time and waits for each to dock
+   * before starting the next, giving up after SESSION_TIMEOUT (10s). An
+   * applet that pre-hides never docks at all -- mb_tray_app_hide() makes
+   * _init_docking() early-return -- so it burns that full timeout and
+   * delays every applet listed after it. Nothing is open at login, which
+   * is exactly when this would bite: measured, the clock and everything
+   * right of it appeared 10s late on every boot.
+   *
+   * An empty taskbar asks for a 1px width instead, which is invisible
+   * between the panel's own margins and costs nothing.
+   *
+   * Do NOT call mb_tray_app_main_init() -- mb_tray_app_main() does it. */
   mb_tray_app_main (App);
 
   return 0;
