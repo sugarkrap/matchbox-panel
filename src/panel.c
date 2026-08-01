@@ -26,7 +26,13 @@ MBPanel *G_panel = NULL;
 
 #define DEFAULT_MSG_FGCOL "black"
 #define DEFAULT_MSG_BGCOL "yellow"
-#define DEFAULT_MSG_BGURGCOL "orange"
+/* Urgent bubbles keep the ordinary black border and black text and change
+ * only the fill, so the difference reads as "something went wrong" at a
+ * glance without the text getting any harder to read -- which matters on a
+ * transflective panel. A washed-out red rather than a saturated one
+ * for the same reason: black on pure red is genuinely hard to read outdoors.
+ * Themeable as PanelMsgBgUrgentCol. */
+#define DEFAULT_MSG_BGURGCOL "#f2a0a0"
 
 #ifdef USE_XSETTINGS
 
@@ -1864,6 +1870,9 @@ MBPanel
 
   panel->atoms[ATOM_MB_REQ_CLIENT_ORDER]
     = XInternAtom(panel->dpy, "_MB_REQ_CLIENT_ORDER", False);
+
+  panel->atoms[ATOM_MB_SYSTEM_TRAY_MESSAGE_URGENT]
+    = XInternAtom(panel->dpy, "_MB_SYSTEM_TRAY_MESSAGE_URGENT", False);
 
 
   /* Set selection atom */

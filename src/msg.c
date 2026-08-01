@@ -57,6 +57,36 @@ _send_tray_context_message(MBPanel *panel,
 }
 
 
+/* Is the message this applet is starting an error rather than ordinary news?
+ * See ATOM_MB_SYSTEM_TRAY_MESSAGE_URGENT in panel.h for why this is a window
+ * property and not a field of the client message. */
+static Bool
+_msg_sender_is_urgent(MBPanel *panel, Window win)
+{
+  Atom           type;
+  int            format;
+  unsigned long  n_items, bytes_after;
+  unsigned long *val = NULL;
+  Bool           urgent = False;
+
+  if (XGetWindowProperty (panel->dpy, win,
+			  panel->atoms[ATOM_MB_SYSTEM_TRAY_MESSAGE_URGENT],
+			  0, 1L, False, XA_CARDINAL,
+			  &type, &format, &n_items,
+			  &bytes_after, (unsigned char **)&val) != Success)
+    return False;
+
+  if (val == NULL)
+    return False;
+
+  if (type == XA_CARDINAL && format == 32 && n_items >= 1)
+    urgent = (*val != 0);
+
+  XFree (val);
+
+  return urgent;
+}
+
 MBPanelMessageQueue*
 msg_new(MBPanel *dock, XClientMessageEvent *e)
 {
@@ -79,7 +109,16 @@ msg_new(MBPanel *dock, XClientMessageEvent *e)
    m->current_msg_length = 0;
    m->pending = False;
    m->next = NULL;
-   
+
+   /* Read now rather than when the bubble is drawn: the sender set this
+    * before sending BEGIN_MESSAGE, so reading it as BEGIN_MESSAGE is handled
+    * is the only point at which it is guaranteed to still describe *this*
+    * message and not a later one. */
+   m->urgent = _msg_sender_is_urgent(dock, e->window);
+
+   m->has_extra_context  = False;
+   m->extra_context_data = NULL;
+
    if (dock->msg_queue_start == NULL)
    {
       DBG("queue is empty\n");
@@ -153,6 +192,7 @@ msg_win_create(MBPanel             *panel,
   int x, y, txt_v_offset;
   unsigned char r, g, b, fr, fg, fb;
   
+  MBColor             *bg_col;
   MBPixbufImage       *img_backing = NULL;
   MBDrawable          *tmp_drw;
 
@@ -292,9 +332,14 @@ msg_win_create(MBPanel             *panel,
    *  - curve corners ? 
    */
   
-  r = mb_col_red(panel->msg_col);
-  g = mb_col_green(panel->msg_col);
-  b = mb_col_blue(panel->msg_col);
+  /* Only the fill changes for an urgent message -- border and text stay as
+   * they are, so an error bubble reads as the same bubble with a warning
+   * colour behind it rather than as a different widget. */
+  bg_col = msg->urgent ? panel->msg_urgent_col : panel->msg_col;
+
+  r = mb_col_red(bg_col);
+  g = mb_col_green(bg_col);
+  b = mb_col_blue(bg_col);
 
   fr = mb_col_red(panel->msg_fg_col);
   fg = mb_col_green(panel->msg_fg_col);
