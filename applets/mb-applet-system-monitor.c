@@ -414,6 +414,11 @@ paint_callback (MBTrayApp *app, Drawable drw )
 
   for (i = 0; i < Bars; i++)
     {
+      /* Clamped, so the fill loop below cannot climb out of its tube:
+       * system_cpu() can read over 100 across a sampling boundary. */
+      if (percent[i] < 0)   percent[i] = 0;
+      if (percent[i] > 100) percent[i] = 100;
+
       pixels[i] = (percent[i] * well_h) / 100;
       if (pixels[i] != prev_pixels[i])
 	changed = 1;
