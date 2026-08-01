@@ -33,6 +33,8 @@
 #include <unistd.h>
 #include <stdlib.h>
 #include <string.h>
+#include <errno.h>		/* telling "no such directory" apart from a
+				 * real failure in build_menu() */
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <dirent.h>
@@ -370,7 +372,21 @@ static void
 build_menu(void)
 {
 
-#define APP_PATHS_N 4
+/* Five, not four: the fifth is the SD card. Applications can be installed
+ * onto a card rather than into the NAND root, which on this hardware is
+ * only ~68 MiB. Without this path such an application is on $PATH, is
+ * launchable, and simply never appears in this menu.
+ *
+ * matchbox-desktop's dotdesktop module has scanned this path for a while
+ * (see the APP_PATHS_N comment there). The menu was left behind, which
+ * mattered less while the desktop also offered category folders and
+ * matters now that it no longer does -- browsing by category is this
+ * menu's job alone.
+ *
+ * A path that is not there costs one failed opendir() per menu build and
+ * is skipped, which is the normal case: most of the time there is no card
+ * in the slot. */
+#define APP_PATHS_N 5
 
   struct menu_lookup_t {
     char       *match_str;
@@ -449,13 +465,17 @@ build_menu(void)
 						       16, 
 						       mb_dot_desktop_folder_entry_get_icon(ddentry) );
 
-      menu_lookup[i].item = mb_menu_add_path(app_data->mbmenu, 
+      menu_lookup[i].item = mb_menu_add_path(app_data->mbmenu,
 					     folder_name,
 					     icon_path, MBMENU_NO_SORT );
 
       menu_lookup[i].match_str = mb_dot_desktop_folder_entry_get_match(ddentry);
       i++;
 
+      /* mb_menu_add_path() strdups the icon path, so this copy is ours to
+       * release. Rebuilding the menu on every open makes it worth being
+       * exact about that. */
+      if (icon_path) free(icon_path);
     }
 
   menu_panel = mb_menu_add_path(app_data->mbmenu, "Utilities/Panel" , NULL, MBMENU_NO_SORT );
@@ -480,10 +500,11 @@ build_menu(void)
       exit(0);
     }
 
-  snprintf(app_paths[0], 256, "%s/applications", DATADIR);  
+  snprintf(app_paths[0], 256, "%s/applications", DATADIR);
   snprintf(app_paths[1], 256, "/usr/share/applications");
   snprintf(app_paths[2], 256, "/usr/local/share/applications");
   snprintf(app_paths[3], 256, "%s/.applications", getenv("HOME"));
+  snprintf(app_paths[4], 256, "/mnt/card/.zaurus/usr/share/applications");
 
   
   for (j = 0; j < APP_PATHS_N; j++)
@@ -495,8 +516,21 @@ build_menu(void)
 
       if ((dp = opendir(app_paths[j])) == NULL)
 	{
-	  fprintf(stderr, "mb-applet-menu-launcher: failed to open %s\n", 
-		  app_paths[j]);
+	  /* "Not there" is the ordinary case for two of these paths -- the
+	   * SD card is usually absent and $HOME/.applications often does
+	   * not exist -- so it is not worth a line of output. Anything else
+	   * (permissions, I/O error) still gets reported.
+	   *
+	   * This is not just tidiness. The menu is now rebuilt every time it
+	   * is opened, and the session's stderr goes to
+	   * /tmp/matchbox-session.log, which on this device is on the jffs2
+	   * root rather than a tmpfs. Logging a line per missing directory
+	   * per menu open would write to flash every time the user taps the
+	   * launcher. Same reasoning as the matchbox-desktop dotdesktop
+	   * module's copy of this loop. */
+	  if (errno != ENOENT)
+	    fprintf(stderr, "mb-applet-menu-launcher: failed to open %s: %s\n",
+		    app_paths[j], strerror(errno));
 	  continue;
 	}
       
@@ -689,6 +723,20 @@ build_menu(void)
       chdir(orig_wd);
     }
 
+  /* Release what this function allocated.
+   *
+   * None of this was freed before, which was survivable while the menu
+   * was built exactly once per session. It is now rebuilt every time the
+   * launcher is tapped, so the same omission would be a slow leak on a
+   * device with 64 MB and no swap.
+   *
+   * Order matters only in that all three outlive the scan above:
+   * root_match_str points into `dd`, and menu_lookup[].match_str points
+   * into `ddfolders`, so neither can be released until the last .desktop
+   * file has been filed into a folder. */
+  if (menu_lookup) free(menu_lookup);
+  if (ddfolders)   mb_dot_desktop_folders_free(ddfolders);
+  if (dd)          mb_dotdesktop_free(dd);
 }
 
 static void
@@ -739,9 +787,41 @@ button_callback (MBTrayApp *app, int x, int y, Bool is_released )
 #ifdef USE_DNOTIFY 		/* block any reloads while active */
       sigemptyset(&block_sigset);
       sigaddset(&block_sigset, SIGRTMIN);
-      sigprocmask(SIG_BLOCK, &block_sigset, NULL); 
+      sigprocmask(SIG_BLOCK, &block_sigset, NULL);
 #endif
-	  
+
+      /* Rebuild before showing, so the menu can never be out of date.
+       *
+       * It used to be built once at startup and then only ever refreshed
+       * by the dnotify path below -- which is compiled out unless
+       * configure was given --enable-dnotify (it is not, here), watches
+       * exactly one of the five application directories even when it is
+       * compiled in, and cannot see a card being inserted at all. The
+       * practical effect was a menu that never changed for the life of
+       * the session: install a package and it was missing until the next
+       * reboot.
+       *
+       * A menu that is only on screen while it is held open does not need
+       * a watcher to stay fresh -- it just needs rebuilding at the moment
+       * it is shown, which is here. The cost is one pass over the
+       * application directories per tap: a few dozen small files, read
+       * from page cache in practice, against a menu the user is about to
+       * spend far longer reading. The free/rebuild pair is exactly what
+       * theme_callback() and the dnotify reload already do.
+       *
+       * The !is_active guard is belt and braces: the next_cancels
+       * handshake below already means we only get here on a release whose
+       * press found the menu down, so it cannot be on screen right now.
+       * Tearing a mapped menu out from under itself would be bad enough
+       * to be worth stating rather than inferring -- and it is the same
+       * condition the dnotify reload guards with.
+       */
+      if (!mb_menu_is_active(app_data->mbmenu))
+	{
+	  mb_menu_free(app_data->mbmenu);
+	  build_menu();
+	}
+
       menu_get_popup_pos (app, &abs_x, &abs_y);
       mb_menu_activate (app_data->mbmenu, abs_x, abs_y);
     }
