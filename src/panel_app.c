@@ -398,8 +398,36 @@ panel_app_handle_configure_request(MBPanel *panel, XConfigureRequestEvent *ev)
 		}
 	      else
 		{
-		  DBG("%s() papp %s is nowhere special\n", __func__, papp->name);
-		  panel_apps_nudge (panel, papp->next, xwc.width - papp->w);
+		  /* An END-gravity applet somewhere in the middle of the
+		   * row. Its neighbours are packed against both of its
+		   * edges, so one of them has to give: the convention for
+		   * END gravity is that an applet grows away from the panel
+		   * edge it is docked to -- its RIGHT edge stays put and
+		   * everything to its left shuffles along.
+		   *
+		   * That takes both calls below. The move keeps this
+		   * applet's right edge where it was; the nudge moves the
+		   * ones further left (papp->next onwards -- the END list
+		   * runs right to left) by the same amount, so the row stays
+		   * packed.
+		   *
+		   * It used to do neither: no move at all, and a nudge with
+		   * the sign inverted. A middle applet that grew therefore
+		   * ate its right-hand neighbour, while its left-hand ones
+		   * marched the other way and ate IT. Nothing had ever
+		   * resized from this position -- the clock is
+		   * apps_end_head and the taskbar is START gravity, so both
+		   * take branches above -- until
+		   * mb-applet-system-monitor started growing a third bar
+		   * when the SD card gets a swapfile, and fused itself with
+		   * the volume applet.
+		   *
+		   * Both branches above already pair a move with a nudge for
+		   * the positions they handle; this one now matches them. */
+		  DBG("%s() papp %s is mid end-list\n", __func__, papp->name);
+		  panel_app_move_to(panel, papp,
+				    papp->x - (xwc.width - papp->w));
+		  panel_apps_nudge (panel, papp->next, papp->w - xwc.width);
 		}
 	      papp->w = xwc.width;
 	    }
