@@ -614,6 +614,20 @@ build_menu(void)
 			    }
 			  
 			  if (m == NULL) m = fallback;
+
+			  /* X-Piko-Heading: pins this entry above a separator at
+			   * the top of its folder, instead of its usual
+			   * alphabetical slot. See MBMENU_HEADING in
+			   * libmb/mbmenu.c -- that is what actually keeps an
+			   * ordinary item from sorting back in ahead of it. */
+			  if (mb_dotdesktop_get(dd, "X-Piko-Heading")
+			      && (!strcasecmp(mb_dotdesktop_get(dd, "X-Piko-Heading"),
+					"true")
+				  || !strcmp(mb_dotdesktop_get(dd, "X-Piko-Heading"),
+					     "1")))
+			    {
+			      flags = MBMENU_HEADING;
+			    }
 			  
 			}
 		      activate_callback = menu_clicked_cb;
