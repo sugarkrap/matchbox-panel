@@ -4,16 +4,26 @@
  *  cpu reading code based on wmbubblemon
  *
  *  Two bars normally -- CPU in green, memory in red -- and a third, blue
- *  one for swap whenever there is swap to show. This machine's only swap
- *  area is a file on the SD card (see userspace/src/cardswap.c), so the
- *  third bar exists exactly while a card is mounted and its swapfile came
- *  up, and disappears again when the card goes. The applet grows and
+ *  one for swap whenever there is swap to show. This machine's only CARD
+ *  swap area is a file on the SD card (see userspace/src/cardswap.c), so
+ *  the third bar exists exactly while a card is mounted and its swapfile
+ *  came up, and disappears again when the card goes. The applet grows and
  *  shrinks with it: the icon is a picture of two tubes or of three, and
  *  the panel is told the new width so it can re-lay-out around us.
  *
  *  Nothing tells us when that happens -- the card is mounted behind our
  *  back by mdev -- so, like mb-applet-card, we watch for it, here by
  *  polling /proc/swaps a couple of times a second.
+ *
+ *  The memory (red) bar carries a second colour of its own: whatever
+ *  slice of "used" memory is actually zram (see userspace/src/zramswap.c)
+ *  holding compressed swap pages gets painted orange instead, on top of
+ *  the same red fill rather than as a separate well -- from the kernel's
+ *  own accounting zram is completely ordinary memory use, so without this
+ *  it would be invisible, baked anonymously into the red. Read from
+ *  /sys/block/zram0/mm_stat; see zram_mem_used(). Reads as 0 -- no orange
+ *  at all, red exactly as before -- on a kernel without CONFIG_ZRAM, so
+ *  there is nothing to gate this on separately.
  *
  *  This program is free software; you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -93,7 +103,24 @@
 #define WELL_Y        6
 #define WELL_H       20
 
+/* Index into percent[]/pixels[]/colour[] for the memory well -- the middle
+ * one, always, whether Bars is 2 or 3 (see paint_callback's header
+ * comment: cpu, memory, swap, in that order). Named because it is checked
+ * against, not just indexed with, in the zram overlay below. */
+#define MEM_BAR       1
+
 #define PROC_SWAPS   "/proc/swaps"
+
+/* zram's own accounting of what it is actually costing RAM -- see
+ * Documentation/admin-guide/blockdev/zram.rst. The fields are, in order,
+ * orig_data_size compr_data_size mem_used_total mem_limit mem_used_max
+ * same_pages pages_compacted huge_pages huge_pages_since; only the third
+ * one is wanted here. This is real physical memory (zsmalloc pool pages,
+ * already scaled to bytes by the driver), not a swap-usage percentage --
+ * from /proc/meminfo's point of view it is completely ordinary "used"
+ * memory, indistinguishable from any other allocation, which is exactly
+ * why the memory bar needs a second colour to call it out at all. */
+#define ZRAM_MM_STAT "/sys/block/zram0/mm_stat"
 
 /* Only swap on the SD card counts. This applet's third bar is specifically
  * the card's swapfile (/mnt/card/.zaurus/swap -- created and enabled by
@@ -120,6 +147,12 @@ struct {
    u_int64_t swap_max;
    unsigned int swap_percent;  /* swap used, in percent */
    unsigned int mem_percent;   /* memory used, in percent */
+
+   /* the slice of mem_used/mem_percent above that is zram (0 if zram is
+    * not enabled in this kernel, or not yet holding anything) -- see
+    * ZRAM_MM_STAT and zram_mem_used() below */
+   u_int64_t zram_used;
+   unsigned int zram_percent;  /* zram's share of mem_max, in percent */
 
 } msd;
 
@@ -192,6 +225,33 @@ int system_cpu(void)
 	cpuload = (100 * (load - oload)) / (total - ototal);
 
     return cpuload;
+}
+
+/* Bytes of real RAM zram is currently holding compressed data in, or 0
+ * if there is nothing to report -- which covers both "this kernel has no
+ * CONFIG_ZRAM" and "zram exists but zramswap never ran" identically,
+ * without needing to tell those apart: either way there is no orange to
+ * paint, and ZRAM_MM_STAT simply is not there to open. Not fatal either
+ * way, unlike /proc/stat and /proc/meminfo above -- zram is optional
+ * where those two are not. */
+u_int64_t
+zram_mem_used (void)
+{
+  FILE      *f;
+  unsigned long long orig_size = 0, compr_size = 0, mem_used = 0;
+
+  if ((f = fopen(ZRAM_MM_STAT, "r")) == NULL)
+    return 0;
+
+  /* "orig_data_size compr_data_size mem_used_total mem_limit ..." -- the
+   * third field is the one wanted; the first two are read into locals
+   * nothing else uses rather than skipped with "%*llu", which some
+   * compilers warn about when paired with a length modifier. */
+  if (fscanf(f, "%llu %llu %llu", &orig_size, &compr_size, &mem_used) != 3)
+    mem_used = 0;
+
+  fclose(f);
+  return (u_int64_t) mem_used;
 }
 
 int system_memory(void)
@@ -318,6 +378,21 @@ int system_memory(void)
       if (msd.mem_percent > 100) msd.mem_percent = 100;
       if (msd.swap_percent > 100) msd.swap_percent = 100;
 
+      /* zram's slice of the memory bar, expressed against the SAME
+       * denominator as mem_percent so the two are directly comparable in
+       * pixels (see the overlay in paint_callback). Zero whenever
+       * ZRAM_MM_STAT can't be read -- no CONFIG_ZRAM, or zramswap never
+       * ran -- which is the ordinary case on a kernel built without it
+       * and simply means no orange gets painted. Clamped to mem_percent
+       * itself as a defensive belt: it is a subset of "used" by
+       * construction, but two readings taken microseconds apart
+       * (mm_stat here, meminfo above) could disagree by a hair.
+       * "Only if ZRAM is enabled" happens for free -- there is nothing
+       * to gate this on explicitly. */
+      msd.zram_used = zram_mem_used();
+      msd.zram_percent = my_mem_max ? (100 * msd.zram_used) / my_mem_max : 0;
+      if (msd.zram_percent > msd.mem_percent) msd.zram_percent = msd.mem_percent;
+
     /* memory info changed - update things */
     return 1;
   }
@@ -366,6 +441,7 @@ void
 paint_callback (MBTrayApp *app, Drawable drw )
 {
   static int prev_pixels[3] = { -1, -1, -1 };
+  static int prev_zram_pixels = -1;
   static int prev_bars = -1;
 
   /* One row per meter, left to right, in the order the wells appear in the
@@ -381,8 +457,18 @@ paint_callback (MBTrayApp *app, Drawable drw )
     { 0x33, 0x66, 0xff }	/* swap   */
   };
 
+  /* zram's own carve-out of the memory well -- see msd.zram_percent. Not
+   * a fourth bar (the icon has exactly as many wells as Bars), just a
+   * second colour painted over the top of the memory well's own red, so
+   * the two always sum to the same total height mem_percent alone used
+   * to draw. Orange reads clearly against both the grey well and the red
+   * beneath it without being confused for the swap bar's blue. */
+  static const struct { unsigned char r, g, b; } colour_zram =
+    { 0xff, 0x99, 0x00 };
+
   int        percent[3];
   int        pixels[3];
+  int        zram_pixels;
   int        i, x, y;
   int        icon_w, icon_units_w;
   int        well_y, well_h, well_w;
@@ -424,6 +510,18 @@ paint_callback (MBTrayApp *app, Drawable drw )
 	changed = 1;
     }
 
+  /* Same pixel math as the loop above, against msd.zram_percent instead
+   * of percent[MEM_BAR] -- clamped to pixels[MEM_BAR] itself (not just
+   * well_h) so the orange overlay below can never paint outside the red
+   * it is supposed to be a slice of, even if rounding put it a pixel
+   * over. Zero when zram isn't in the picture (see zram_mem_used()),
+   * which paints no orange at all -- the memory bar looks exactly as it
+   * always has. */
+  zram_pixels = (msd.zram_percent * well_h) / 100;
+  if (zram_pixels > pixels[MEM_BAR]) zram_pixels = pixels[MEM_BAR];
+  if (zram_pixels != prev_zram_pixels)
+    changed = 1;
+
   /* A mode change redraws even when every bar happens to be unmoved: the
    * icon underneath it is a different one. */
   if (!changed && Bars == prev_bars)
@@ -450,8 +548,25 @@ paint_callback (MBTrayApp *app, Drawable drw )
 	  mb_pixbuf_img_plot_pixel(pb, img_backing, x, y,
 				   colour[i].r, colour[i].g, colour[i].b);
 
+      /* zram overlay: repaint the TOP zram_pixels rows of the memory well's
+       * own fill in orange -- "top" meaning nearest well_y, which is the
+       * last (highest y-descending) end of the loop just above, i.e. the
+       * end furthest from the well's floor. The red underneath is left
+       * alone; this only ever shrinks how much of it stays visible, never
+       * how tall the combined red+orange fill is, so the bar keeps
+       * reading "this much memory is used" exactly as before -- it is
+       * now just split into "of which, this much is zram". No-op (loop
+       * does not execute) whenever zram_pixels is 0. */
+      if (i == MEM_BAR)
+	for (y = well_y + well_h - pixels[i];
+	     y < well_y + well_h - pixels[i] + zram_pixels; y++)
+	  for (x = well_x; x < well_x + well_w; x++)
+	    mb_pixbuf_img_plot_pixel(pb, img_backing, x, y,
+				     colour_zram.r, colour_zram.g, colour_zram.b);
+
       prev_pixels[i] = pixels[i];
     }
+  prev_zram_pixels = zram_pixels;
 
   /* XXX Alert here for low memory  */
 
