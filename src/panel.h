@@ -257,6 +257,17 @@ typedef struct _panel {
 
   MBPanelOrientation      orientation;
 
+  /* The orientation asked for on the command line, which describes the
+   * LANDSCAPE desktop. Every rotation picks the edge from this and the
+   * screen's current shape, never from the panel's own last edge, so the
+   * posture alone decides where the panel is -- see
+   * panel_handle_screen_rotation(). */
+  MBPanelOrientation      home_orientation;
+
+  /* Last root-window size the panel acted on, so a ConfigureNotify that
+   * does not actually change the screen shape is not a rotation. */
+  int                     dpy_w, dpy_h;
+
   int                     system_tray_id;
 
   Bool                    use_themes; 
@@ -330,11 +341,14 @@ panel_handle_full_panel (MBPanel *panel, MBPanelApp *bad_papp);
 void 
 panel_toggle_visibilty(MBPanel *panel);
 
-void 
-panel_change_orientation (MBPanel            *panel, 
+void
+panel_change_orientation (MBPanel            *panel,
 			  MBPanelOrientation  new_orientation,
-			  int                 dpy_w, 
+			  int                 dpy_w,
 			  int                 dpy_h);
+
+void
+panel_handle_screen_rotation (MBPanel *panel, int dpy_w, int dpy_h);
 
 void
 panel_update_client_list_prop (MBPanel *panel);

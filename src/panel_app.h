@@ -73,9 +73,15 @@ panel_apps_rescale (MBPanel    *panel,
 		    MBPanelApp *papp);
 
 void
-panel_apps_nudge (MBPanel    *panel, 
+panel_apps_nudge (MBPanel    *panel,
 		  MBPanelApp *papp,
 		  int         amount);
+
+/* Re-pack every applet from the panel's current length and orientation.
+ * Use this for changes to the PANEL (rotation, resize); nudge is for
+ * changes to one applet. See the comment on the definition. */
+void
+panel_apps_relayout (MBPanel *panel);
 
 void 
 panel_app_move_to(MBPanel *panel, MBPanelApp *papp, int origin_offset);
