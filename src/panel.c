@@ -1014,7 +1014,6 @@ panel_main(MBPanel *panel)
   MBPanelApp *papp;
   XEvent an_event;
   int xfd;
-  Bool had_rotation = False;
 
 
   XSelectInput (panel->dpy, panel->win_root, 
@@ -1097,11 +1096,17 @@ panel_main(MBPanel *panel)
 	      DBG("%s(): configureNotify\n", __func__);
 	      if (an_event.xconfigure.window == panel->win_root)
 		{
-		  had_rotation = True;
 		  DBG("%s() **** HAD ROTATION ***\n", __func__);
+
+		  /* The screen changed shape. Decide the edge here, from
+		   * the new shape, rather than inferring it later from
+		   * whatever size the window manager hands us. */
+		  panel_handle_screen_rotation (panel,
+						an_event.xconfigure.width,
+						an_event.xconfigure.height);
 		  break;
-		}	 
-     
+		}
+
 	      if (an_event.xconfigure.window == panel->win)
 		{
 		  DBG("%s(): configureNotify on panel\n", __func__);
@@ -1112,9 +1117,6 @@ panel_main(MBPanel *panel)
 		  if (panel->w != an_event.xconfigure.width
 		      || panel->h != an_event.xconfigure.height)
 		    {
-		      int diff = 0;
-		      MBPanelApp *papp = NULL;
-
 		      DBG("mark %i\n", __LINE__);
 
 		      if (panel->ignore_next_config)
@@ -1123,95 +1125,43 @@ panel_main(MBPanel *panel)
 			  break;
 			}
 
-		      if (panel->use_flip && had_rotation) 
-			{
-			  /* Flip if are length is changed 
-			     XXX a little hacky XXXX
-			  */
-			  int dpy_w, dpy_h;
-			  XWindowAttributes root_attr;
-			  
-			  XGetWindowAttributes(panel->dpy, 
-					       panel->win_root, 
-					       &root_attr);
-			  
-			  dpy_w = root_attr.width;
-			  dpy_h = root_attr.height;
-			  
-			  had_rotation = False;
-
-			  DBG("mark %i\n", __LINE__);
-
-			  if ((PANEL_IS_VERTICAL(panel)
-			       && (an_event.xconfigure.width == panel->w)
-			       )
-			      ||
-			      (!PANEL_IS_VERTICAL(panel)
-			       && (an_event.xconfigure.height == panel->h)
-			       /* && (an_event.xconfigure.width  == dpy_w) 
-				  && dpy_w != panel->w */ )
-			      )
-			    { 
-
-			      DBG("%s() flipping ....\n", __func__);
-
-			      panel->ignore_next_config = True;
-
-			      switch (panel->orientation)
-				{
-				case South:
-				  panel_change_orientation(panel, East,
-							   dpy_w, dpy_h);
-							   break;
-				case North:
-				  panel_change_orientation(panel, West,
-							   dpy_w, dpy_h);
-				  break;
-				case West:
-				  panel_change_orientation(panel, North,
-							   dpy_w, dpy_h);
-				  break;
-				case East:
-				  panel_change_orientation(panel, South,
-							   dpy_w, dpy_h);
-				  break;
-				}
-			      break;
-			    }
-			}
-
-		      if (PANEL_IS_VERTICAL(panel))
-			{
-			  diff = an_event.xconfigure.height - panel->h;
-			  if (an_event.xconfigure.y > panel->y)
-			    papp = panel->apps_start_head;
-			  else
-			    papp = panel->apps_end_head;
-			} else {	
-			  DBG("mark %i\n", __LINE__);
-			  diff = an_event.xconfigure.width - panel->w;
-			  if (an_event.xconfigure.x > panel->x)
-			    papp = panel->apps_start_head;
-			  else
-			    papp = panel->apps_end_head;
-			}
-
+		      /* The edge to dock to on a rotation is chosen when
+		       * the ROOT window changes shape, in
+		       * panel_handle_screen_rotation(), which is the one
+		       * event that says unambiguously what happened. What
+		       * used to stand here instead was a guess made from
+		       * this window's new size against its old one, and it
+		       * only ever guessed right on the way out to portrait
+		       * -- see that function for why the way back could
+		       * not work. By the time we get here the orientation
+		       * is already settled; all that is left is to take
+		       * the new size and re-pack the applets into it.
+		       *
+		       * Re-packed, not nudged. A nudge walks ONE gravity
+		       * list by the size delta, so a panel that changes
+		       * length moves half its applets and leaves the other
+		       * half behind -- harmless once, cumulative over
+		       * repeated rotations, and eventually the whole row is
+		       * outside the panel. panel_apps_relayout() derives
+		       * every offset from the panel's new length instead,
+		       * so it cannot drift and it repairs a row that
+		       * already has. */
 		      panel->w = an_event.xconfigure.width;
 		      panel->h = an_event.xconfigure.height;
 
-		      panel_apps_nudge (panel, papp, diff); 
+		      panel_apps_relayout (panel);
 
-		      /* Nake sure bg gets updated */
-		      if (!(panel->use_flip && had_rotation))
-			{
-			  char *tmp_str = NULL;
-			  if (panel->bg_spec)
-			    {
-			      tmp_str = strdup(panel->bg_spec) ;
-			      panel_set_bg(panel, panel->bg_type, tmp_str);
-			    }
-			  if (tmp_str) free(tmp_str);
-			}
+		      /* Make sure bg gets updated: it is a pixmap sized to
+		       * the panel, so a resize invalidates it. */
+		      {
+			char *tmp_str = NULL;
+			if (panel->bg_spec)
+			  {
+			    tmp_str = strdup(panel->bg_spec) ;
+			    panel_set_bg(panel, panel->bg_type, tmp_str);
+			  }
+			if (tmp_str) free(tmp_str);
+		      }
 
 		      // panel_apps_rescale (panel, panel->apps_start_head);
 		      // panel_apps_rescale (panel, panel->apps_end_head);
@@ -1236,6 +1186,95 @@ panel_main(MBPanel *panel)
 	  msg_handle_events(panel, &an_event);
 	}
     }
+}
+
+/* The edge a panel docked to `o' ends up on when the screen turns 90
+ * degrees. An involution: turning back returns the original edge. */
+static MBPanelOrientation
+panel_orientation_rotated (MBPanelOrientation o)
+{
+  switch (o)
+    {
+    case South: return East;
+    case East:  return South;
+    case North: return West;
+    case West:  return North;
+    }
+  return o;
+}
+
+/*
+ * A rotation happened: the root window has changed shape. Work out which
+ * edge to dock to and go there.
+ *
+ * THIS IS DECIDED FROM THE SCREEN, NOT FROM OUR OWN LAST SIZE. The stock
+ * 0.9 code flipped from inside the panel's *own* ConfigureNotify handler,
+ * by comparing the size the window manager had just given it against the
+ * size it used to have ("my length changed but my thickness didn't, so
+ * that must have been a rotation"). That test only holds while the window
+ * manager's idea of which edge we are docked to still agrees with ours.
+ * Coming back from portrait it does not have to: the panel re-docks itself
+ * east on the way out, and a manager that still believes the panel is a
+ * south dock resizes it by the *south* rule on the way back -- a geometry
+ * that matches neither branch of the old test, so nothing flipped and the
+ * panel simply stayed down the right-hand side of a landscape screen.
+ *
+ * The screen's own shape has no such ambiguity, and neither has the
+ * orientation the panel was asked for on the command line. The edge is a
+ * pure function of the two -- landscape gets the requested orientation,
+ * portrait gets it turned a quarter -- so it cannot depend on how many
+ * rotations happened first, on which way round the machine booted, or on
+ * what anyone else believes in between.
+ *
+ * THE REQUESTED ORIENTATION DESCRIBES LANDSCAPE. "--orientation south"
+ * means the bottom of the 640x480 desktop, which is this machine's normal
+ * clamshell posture; portrait is the swivelled one and gets east. Reading
+ * it as "whatever shape the screen happened to be at startup" is the
+ * obvious alternative and it is wrong: boot the machine already swivelled
+ * -- which is entirely normal, the hinge does not care -- and that reading
+ * pins "south" to portrait, so the panel lands at the bottom in tablet
+ * posture and down the right-hand side in the clamshell, precisely
+ * inverted. Observed on hardware doing exactly that.
+ */
+void
+panel_handle_screen_rotation (MBPanel *panel, int dpy_w, int dpy_h)
+{
+  Bool               now_portrait;
+  MBPanelOrientation want;
+
+  if (dpy_w == panel->dpy_w && dpy_h == panel->dpy_h)
+    return;			/* not a shape change, nothing to do */
+
+  panel->dpy_w = dpy_w;
+  panel->dpy_h = dpy_h;
+
+  if (!panel->use_flip)
+    return;			/* --no-flip: stay where we were put */
+
+  now_portrait = (dpy_h > dpy_w) ? True : False;
+
+  want = now_portrait ? panel_orientation_rotated (panel->home_orientation)
+                      : panel->home_orientation;
+
+  DBG("%s() screen now %ix%i, orientation %i -> %i\n", __func__,
+      dpy_w, dpy_h, panel->orientation, want);
+
+  if (want == panel->orientation)
+    {
+      /*
+       * Same edge, different length -- a south panel on a narrower
+       * screen, say. The window manager resizes docks itself on a
+       * rotation, and the ConfigureNotify that arrives from it is
+       * handled in panel_main() like any other resize.
+       */
+      return;
+    }
+
+  /* Our own XMoveResizeWindow() below generates a ConfigureNotify we
+   * would otherwise treat as a resize to nudge applets for. */
+  panel->ignore_next_config = True;
+
+  panel_change_orientation (panel, want, dpy_w, dpy_h);
 }
 
 static void
@@ -1308,11 +1347,14 @@ panel_change_orientation(MBPanel *panel,
       XMoveResizeWindow( panel->dpy, panel->win, panel->x, panel->y,
 			 panel->w, panel->h );
 
-      /* move_to() will reposition each app */
+      /* The panel's two axes have traded places, so each applet's own
+       * width and height do too -- a 48x32 monitor is 32x48 down the side
+       * of a vertical panel. Only the sizes are touched here; where each
+       * one GOES is worked out afterwards. */
       while (i < 2)
 	{
 	  papp_cur = papp_heads[i];
-	  DBG("%s() moveing to, cur is i: %i ( %p )\n",
+	  DBG("%s() swapping sizes, cur is i: %i ( %p )\n",
 	      __func__, i, papp_cur);
 
 	  while (papp_cur != NULL)
@@ -1321,26 +1363,18 @@ panel_change_orientation(MBPanel *panel,
 	      tmp = papp_cur->w;
 	      papp_cur->w = papp_cur->h;
 	      papp_cur->h = tmp;
-	  
-	      if (panel->orientation == North || panel->orientation == South)
-		{
-		  papp_cur->x = papp_cur->offset;
-		  papp_cur->y = (panel->h - papp_cur->h) / 2;
-		}
-	      else
-		{
-		  papp_cur->y = papp_cur->offset;
-		  papp_cur->x = (panel->w - papp_cur->w) / 2;
-		}
 
-	      XMoveWindow(panel->dpy, papp_cur->win, 
-			  papp_cur->x, papp_cur->y);      
-
-	      panel_app_deliver_config_event(panel, papp_cur);
 	      papp_cur = papp_cur->next;
 	    }
 	  i++;
 	}
+
+      /* Re-pack the row for the new orientation rather than reusing each
+       * applet's old offset. The offsets are only meaningful against the
+       * length and edge they were computed for, and reusing them across a
+       * rotation is what let them drift outside the panel entirely --
+       * see panel_apps_relayout(). */
+      panel_apps_relayout (panel);
     }
   else
     {
@@ -1605,7 +1639,10 @@ MBPanel
   XSetErrorHandler(util_handle_xerror);
    
   panel = NEW(MBPanel);
-  memset(panel, sizeof(MBPanel), 0);
+  /* Arguments were the wrong way round here (fill 0 bytes with the value
+   * sizeof(MBPanel)), so the struct was left as malloc()'s garbage and
+   * every field not assigned below was undefined. */
+  memset(panel, 0, sizeof(MBPanel));
 
   /* defualts */
 
@@ -1762,8 +1799,22 @@ MBPanel
   panel->win_root = RootWindow(panel->dpy, panel->screen);
 
   if (panel->default_panel_size == 0)
-    panel->default_panel_size 
+    panel->default_panel_size
       = ( DisplayHeight(panel->dpy, panel->screen) > 320 ) ? 36 : 20;
+
+  /* The edge a rotation has to be able to put us back on. What was asked
+   * for describes the LANDSCAPE desktop -- see
+   * panel_handle_screen_rotation() -- so a session that starts with the
+   * hinge already swivelled starts a quarter turn round, and lands on the
+   * same edge as one that starts in the clamshell and is swivelled
+   * afterwards. Booting swivelled is not a special case worth having its
+   * own layout. */
+  panel->dpy_w = DisplayWidth(panel->dpy, panel->screen);
+  panel->dpy_h = DisplayHeight(panel->dpy, panel->screen);
+  panel->home_orientation = panel->orientation;
+
+  if (panel->use_flip && panel->dpy_h > panel->dpy_w)
+    panel->orientation = panel_orientation_rotated (panel->orientation);
 
   panel->x = 0;
   panel->y = 0;

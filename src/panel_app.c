@@ -540,8 +540,55 @@ panel_app_move_to (MBPanel    *panel,
   XMoveWindow(panel->dpy, papp->win, papp->x, papp->y);      
 }
 
+/*
+ * Re-pack both gravity lists from scratch, exactly as docking would have
+ * laid them out at the panel's current length and orientation.
+ *
+ * WHY NOT NUDGE. panel_apps_nudge() shifts one list by a delta, which is
+ * right for a local change (an applet grew, an applet left) but wrong for
+ * a change to the panel itself: it only ever walks ONE of the two lists --
+ * the caller picks start or end -- so a resize moves half the row and
+ * leaves the other half where it was. Do that once per rotation and the
+ * two halves march apart in opposite directions, a few hundred pixels at
+ * a time, until every applet is outside the panel and the bar looks
+ * empty. Found exactly that way after the panel learned to come back from
+ * portrait (see panel_handle_screen_rotation): the applet windows were
+ * still mapped and still children of the panel, sitting at y=1200 and
+ * y=-604 on a 640-tall panel.
+ *
+ * Offsets here are derived, never accumulated, so this is idempotent and
+ * self-healing: whatever state the row drifted into, one call puts it
+ * back. The arithmetic deliberately mirrors panel_app_add_start() and
+ * panel_app_add_end() -- START packs up from 0 in list order, END packs
+ * down from the far end -- so a re-layout and a fresh dock cannot
+ * disagree.
+ */
 void
-panel_apps_nudge (MBPanel    *panel, 
+panel_apps_relayout (MBPanel *panel)
+{
+  MBPanelApp *papp;
+  int         length = PANEL_IS_VERTICAL(panel) ? panel->h : panel->w;
+  int         offset;
+
+  offset = 0;
+  for (papp = panel->apps_start_head; papp != NULL; papp = papp->next)
+    {
+      panel_app_move_to (panel, papp, offset);
+      offset += panel_app_get_size (panel, papp);
+      panel_app_deliver_config_event (panel, papp);
+    }
+
+  offset = length;
+  for (papp = panel->apps_end_head; papp != NULL; papp = papp->next)
+    {
+      offset -= panel_app_get_size (panel, papp);
+      panel_app_move_to (panel, papp, offset);
+      panel_app_deliver_config_event (panel, papp);
+    }
+}
+
+void
+panel_apps_nudge (MBPanel    *panel,
 		  MBPanelApp *papp,
 		  int         amount)
 {
