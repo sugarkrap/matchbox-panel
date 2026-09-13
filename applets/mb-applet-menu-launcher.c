@@ -615,6 +615,27 @@ build_menu(void)
 			  
 			  if (m == NULL) m = fallback;
 
+			  char *platform = (char *)mb_dotdesktop_get(dd, "X-Piko-Platform");
+
+			  if (platform != NULL && platform[0] != '\0')
+			    {
+			      char platform_path[256];
+
+			      if (m != NULL && m != app_data->mbmenu->rootmenu)
+				{
+				  snprintf(platform_path, sizeof(platform_path),
+					   "%s/Emulation/%s", m->title, platform);
+				}
+			      else
+				{
+				  snprintf(platform_path, sizeof(platform_path),
+					   "Emulation/%s", platform);
+				}
+
+			      m = mb_menu_add_path(app_data->mbmenu, platform_path,
+						   NULL, 0);
+			    }
+
 			  /* X-Piko-Heading: pins this entry above a separator at
 			   * the top of its folder, instead of its usual
 			   * alphabetical slot. See MBMENU_HEADING in
